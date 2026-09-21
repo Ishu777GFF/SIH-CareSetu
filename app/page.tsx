@@ -95,6 +95,14 @@ import {
   revokePhoneAccessToken,
   type PhoneAccessToken,
 } from "@/lib/phone-access";
+import {
+  consumeContinuityPassport,
+  continuityPassportLink,
+  createContinuityPassport,
+  getContinuityPassport,
+  type ContinuityPassport,
+} from "@/lib/continuity-passport";
+import { detectOcrIssues, ocrConfidenceLabel } from "@/lib/ocr-review";
 import Landing from "./landing";
 import RegistrationScreen from "./registration";
 import HealthRecordsPage from "./health-records";
@@ -594,6 +602,11 @@ export default function CareSetu() {
   const [phoneAccessNow, setPhoneAccessNow] = useState(Date.now());
   const [mobileAccessTokenId, setMobileAccessTokenId] = useState<string | null>(null);
   const [mobileAccessRoute, setMobileAccessRoute] = useState(false);
+  const [continuityPassport, setContinuityPassport] = useState<ContinuityPassport | null>(null);
+  const [continuityQr, setContinuityQr] = useState("");
+  const [resumeRoute, setResumeRoute] = useState(false);
+  const [resumeCode, setResumeCode] = useState("");
+  const [resumeConsent, setResumeConsent] = useState(false);
   const [toast, setToast] = useState("");
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All");
@@ -729,7 +742,14 @@ export default function CareSetu() {
     } catch {}
     const path = location.pathname;
     const route = path.replace(/^\/(patient|doctor)\/?/, "").replace(/\/$/, "");
-    if (path === "/mobile-access") {
+    if (path === "/resume-case") {
+      setLandingVisible(false);
+      setRegistrationMode(false);
+      setAuth(false);
+      setRole("patient");
+      setResumeRoute(true);
+      setResumeCode(new URLSearchParams(location.search).get("code") || "");
+    } else if (path === "/mobile-access") {
       setLandingVisible(false);
       setRegistrationMode(false);
       setAuth(false);
@@ -888,7 +908,38 @@ export default function CareSetu() {
       color: { dark: "#10231b", light: "#ffffff" },
     }).then(setPhoneAccessQr).catch(() => setPhoneAccessQr(""));
   }, [phoneAccess?.tokenId, phoneAccess?.status]);
+  useEffect(() => {
+    if (!continuityPassport || continuityPassport.status !== "ACTIVE") { setContinuityQr(""); return; }
+    QRCode.toDataURL(continuityPassportLink(continuityPassport.code), { width: 230, margin: 1, errorCorrectionLevel: "M", color: { dark: "#10231b", light: "#ffffff" } })
+      .then(setContinuityQr).catch(() => setContinuityQr(""));
+  }, [continuityPassport?.code, continuityPassport?.status]);
   const notify = (message: string) => setToast(t(message));
+  const createContinuityPassportForCase = () => {
+    try {
+      const patientVisitIds = new Set(s.visits.filter((visit) => visit.patientId === patient.id).map((visit) => visit.id));
+      const passport = createContinuityPassport({ patientId: patient.id, answers, intakeStep: step, reports: s.reports.filter((report) => patientVisitIds.has(report.visitId)) });
+      setContinuityPassport(passport);
+      open("continuity-passport");
+    } catch {
+      notify("Could not prepare the continuation passport in this browser.");
+    }
+  };
+  const resumeContinuityCase = () => {
+    if (!resumeConsent) return;
+    const passport = consumeContinuityPassport(resumeCode);
+    if (!passport) return;
+    setS((previous) => ({
+      ...previous,
+      selectedPatient: passport.patientId,
+      answers: { ...previous.answers, [passport.patientId]: passport.answers },
+      intakeStep: { ...previous.intakeStep, [passport.patientId]: passport.intakeStep },
+      reports: [...previous.reports.filter((report) => !passport.reports.some((saved) => saved.id === report.id)), ...passport.reports],
+    }));
+    sessionStorage.setItem("medi-role", "patient");
+    setPage("AI Case-Taking");
+    setResumeRoute(false);
+    history.replaceState({}, "", "/patient/ai-case-taking");
+  };
   const generatePhoneAccess = () => {
     if (phoneAccess?.status === "ACTIVE") revokePhoneAccessToken(phoneAccess.tokenId);
     const token = createPhoneAccessToken(patient.id);
@@ -2177,6 +2228,9 @@ export default function CareSetu() {
                 <CheckCheck size={14} /> Saved on this device
               </span>
             </div>
+            <button className="text-button" onClick={createContinuityPassportForCase}>
+              <QrCode size={15} /> Continue on another device
+            </button>
             <div className="intake-progress">
               <i style={{ width: `${((step + 1) / 9) * 100}%` }} />
             </div>
@@ -3019,6 +3073,19 @@ export default function CareSetu() {
           ))}
         </div>
         <section className="card">
+          <div className="card-head"><div><h2>Doctor verification required</h2><p className="fine">OCR flags are review prompts only. They never alter a prescription or diagnosis.</p></div><Badge tone="sand">Clinician review</Badge></div>
+          {s.reports.filter((report) => {
+            const visit = s.visits.find((item) => item.id === report.visitId);
+            return visit?.doctorId === selectedDoctorId() && !report.verified;
+          }).map((report) => {
+            const visit = s.visits.find((item) => item.id === report.visitId)!;
+            const owner = getPatient(visit.patientId);
+            const issues = detectOcrIssues(report, owner, s.reports.filter((item) => item.visitId === visit.id), s.answers[owner.id]?.allergies || owner.allergiesStatus || "");
+            return <button key={report.id} className="visit-row" onClick={() => open("report", report.id)}><span className="step-icon sand"><FileText size={18} /></span><span className="grow"><strong>{report.name} · {owner.name}</strong><small>{ocrConfidenceLabel(report.ocrConfidence)} confidence · {issues.map((issue) => issue.label).slice(0, 2).join(" · ")}</small></span><ChevronRight size={17} /></button>;
+          })}
+          {!s.reports.some((report) => { const visit = s.visits.find((item) => item.id === report.visitId); return visit?.doctorId === selectedDoctorId() && !report.verified; }) && <p className="fine">No OCR items currently need verification in your care scope.</p>}
+        </section>
+        <section className="card">
           <div className="card-head">
             <h2>{t("Patient Queue")}</h2>
             <Badge tone="subtle">Synthetic clinical workflow</Badge>
@@ -3403,6 +3470,17 @@ export default function CareSetu() {
     if (!modal) return null;
     const v = s.visits.find((x) => x.id === modal.id);
     const d = doctorFor(bookDoctor);
+    if (modal.type === "continuity-passport") {
+      const active = continuityPassport?.status === "ACTIVE";
+      return <section className="phone-access-modal">
+        <Badge tone="sand">Prototype continuity</Badge>
+        <p className="phone-access-copy">Scan the QR code or enter this short code on the other device to resume this unfinished case.</p>
+        {active && continuityQr ? <img className="phone-access-qr" src={continuityQr} alt="QR code for the CareSetu case continuation" /> : null}
+        <div className="phone-access-status"><span>Continuation code</span><strong style={{ letterSpacing: ".16em" }}>{continuityPassport?.code || "Unavailable"}</strong></div>
+        <p className="fine">Expires in 15 minutes. The receiving device must confirm consent before the saved answers, attached reports, and current question are restored.</p>
+        <p className="phone-access-note"><ShieldCheck size={18} /> This browser-local prototype does not provide a secure hospital transfer. A production version requires server-side storage and authorization.</p>
+      </section>;
+    }
     if (modal.type === "phone-access") {
       const active = phoneAccess?.status === "ACTIVE";
       const expired = phoneAccess?.status === "EXPIRED";
@@ -4187,9 +4265,13 @@ export default function CareSetu() {
       const report = s.reports.find((x) => x.id === modal.id);
       if (
         !report ||
-        (!isDoctor && !visits.some((x) => x.id === report.visitId))
+        (!isDoctor && !visits.some((x) => x.id === report.visitId)) ||
+        (isDoctor && s.visits.find((x) => x.id === report.visitId)?.doctorId !== selectedDoctorId())
       )
         return <p>Document unavailable for this patient.</p>;
+      const reportPatient = getPatient(s.visits.find((x) => x.id === report.visitId)!.patientId);
+      const reportIssues = detectOcrIssues(report, reportPatient, s.reports.filter((item) => item.visitId === report.visitId), s.answers[reportPatient.id]?.allergies || reportPatient.allergiesStatus || "");
+      const confidence = ocrConfidenceLabel(report.ocrConfidence);
       return (
         <>
           <div className="ocr-grid">
@@ -4230,11 +4312,12 @@ export default function CareSetu() {
             </section>
             <section>
               <h3>Extracted content</h3>
-              <Badge tone="sand">
-                {report.fixture
-                  ? "Simulated OCR · needs review"
-                  : "Extraction unavailable"}
-              </Badge>
+              <Badge tone={confidence === "High" ? "mint" : "sand"}>{report.fixture ? `OCR confidence: ${confidence}` : "Extraction unavailable"}</Badge>
+              <section className="clinical-alert" aria-label="OCR review flags">
+                <h3>Doctor verification required</h3>
+                <p>These are review flags from simulated extraction. They do not change medicines, allergies, or diagnoses.</p>
+                {reportIssues.map((issue) => <p key={issue.label}><strong>{issue.label}:</strong> {issue.detail}</p>)}
+              </section>
               {report.fixture ? (
                 <>
                   <label className="field">
@@ -4259,19 +4342,22 @@ export default function CareSetu() {
                     supplied.
                   </p>
                   {isDoctor && (
-                    <Btn
-                      disabled={!!report.verified}
+                    <div className="form-actions">
+                    {(["VERIFIED", "CORRECTED", "PATIENT_CONFIRMATION"] as const).map((status) => <Btn
+                      key={status}
+                      secondary={status !== "VERIFIED"}
+                      disabled={!!report.verified && status === "VERIFIED"}
                       onClick={() => {
                         setS((prev) => ({
                           ...prev,
                           reports: prev.reports.map((r) =>
-                            r.id === report.id ? { ...r, verified: true } : r,
+                            r.id === report.id ? { ...r, verified: status === "VERIFIED", reviewStatus: status } : r,
                           ),
                         }));
                         changeVisit(
                           report.visitId,
                           {},
-                          "Dr. Meera Sharma verified the fictional extracted note",
+                          `Clinician marked OCR item as ${status.toLowerCase().replaceAll("_", " ")}`,
                         );
                         const linkedVisit = s.visits.find(
                           (item) => item.id === report.visitId,
@@ -4286,11 +4372,8 @@ export default function CareSetu() {
                             eventKey: `patient-report-reviewed-${report.id}`,
                           });
                       }}
-                    >
-                      {report.verified
-                        ? "Verified by fictional clinician"
-                        : "Verify extracted note"}
-                    </Btn>
+                    >{status === "VERIFIED" ? "Verified" : status === "CORRECTED" ? "Corrected" : "Needs patient confirmation"}</Btn>)}
+                    </div>
                   )}
                 </>
               ) : (
@@ -4692,7 +4775,7 @@ export default function CareSetu() {
                   {r.verified
                     ? "Clinician verified"
                     : r.fixture
-                      ? "Simulated OCR · review needed"
+                      ? `OCR confidence: ${ocrConfidenceLabel(r.ocrConfidence)} · review needed`
                       : "Extraction unavailable"}
                 </small>
               </span>
@@ -4723,6 +4806,7 @@ export default function CareSetu() {
     cancel: "Cancel appointment",
     reset: "Reset records",
     "phone-access": "Continue on your phone",
+    "continuity-passport": "CareSetu Continuity Passport",
   };
   if (!ready)
     return (
@@ -4751,6 +4835,27 @@ export default function CareSetu() {
         onComplete={finishRegister}
       />
     );
+  if (ready && resumeRoute) {
+    const passport = getContinuityPassport(resumeCode);
+    const valid = passport?.status === "ACTIVE";
+    return <main className="phone-access-landing"><section className="card">
+      <div className="phone-access-brand"><HeartPulse size={25} /><strong>CareSetu</strong></div>
+      <Badge tone="sand">Prototype continuity</Badge>
+      <h1>Resume CareSetu case</h1>
+      {valid ? <>
+        <p>This code can restore an unfinished case in this browser-local prototype.</p>
+        <label className="field" style={{ textAlign: "left" }}><span>Continuation code</span><input value={resumeCode} onChange={(event) => setResumeCode(event.target.value.toUpperCase())} /></label>
+        <label className="consent-option" style={{ textAlign: "left" }}><input type="checkbox" checked={resumeConsent} onChange={(event) => setResumeConsent(event.target.checked)} /> <span>I confirm that I want to restore this case on this device.</span></label>
+        <Btn disabled={!resumeConsent} onClick={resumeContinuityCase}>Resume case</Btn>
+        <p className="fine">Saved answers, uploads, and the current question are restored only after this confirmation.</p>
+      </> : <>
+        <p>This continuation code is invalid, expired, already used, or unavailable in this browser’s prototype storage.</p>
+        <label className="field" style={{ textAlign: "left" }}><span>Continuation code</span><input value={resumeCode} onChange={(event) => setResumeCode(event.target.value.toUpperCase())} placeholder="Enter code" /></label>
+        <Btn secondary onClick={() => { const next = getContinuityPassport(resumeCode); if (next?.status === "ACTIVE") setResumeConsent(false); else notify("That continuation code is not available."); }}>Check code</Btn>
+        <Btn secondary onClick={() => { setResumeRoute(false); setLandingVisible(true); history.replaceState({}, "", "/"); }}>Return to CareSetu</Btn>
+      </>}
+    </section></main>;
+  }
   if (ready && mobileAccessRoute) {
     const accessToken = getPhoneAccessToken(mobileAccessTokenId);
     const valid = accessToken?.status === "ACTIVE";

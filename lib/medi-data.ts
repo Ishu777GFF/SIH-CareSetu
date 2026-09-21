@@ -13,7 +13,7 @@ export type Patient={id:string;name:string;age:number;initials:string;patientCod
 export const patients:Patient[]=careCaseSeeds.map(p=>({id:p.id,name:p.name,age:p.age,initials:p.initials,patientCode:p.code,phone:p.phone,email:p.email,preferredLanguage:p.language,address:p.address,emergencyContact:p.emergency,abhaLinked:false,allergiesStatus:p.allergies,currentMedicines:p.medicines}));
 export type Observation={id:string;patientId:string;date:string;height:number;weight:number;source:string;systolic?:number;diastolic?:number;pulse?:number;temperature?:number;oxygen?:number};
 export type LabResult=LabSeed;
-export type Report={id:string;visitId:string;name:string;date:string;type:string;fixture?:boolean;data?:string;extracted?:string;verified?:boolean;category?:string;pages?:number;ocrConfidence?:number;labResults?:LabResult[]};
+export type Report={id:string;visitId:string;name:string;date:string;type:string;fixture?:boolean;data?:string;extracted?:string;verified?:boolean;reviewStatus?:'VERIFIED'|'CORRECTED'|'PATIENT_CONFIRMATION';category?:string;pages?:number;ocrConfidence?:number;labResults?:LabResult[]};
 export type Visit={id:string;patientId:string;doctorId:string;date:string;time:string;reason:string;status:string;token?:string;priority:string;provisional:string;summary?:string;approved?:string;followup?:string;activity:string[];versions?:string[];safetyAlert?:string};
 export type EmergencyEscalation={id:string;patientId:string;visitId:string;trigger:string;label:string;matchedText:string;createdAt:string;status:'active'|'acknowledged';demo:true};
 export type CareMessageAttachment={name:string;type:string;size:number;data:string};
