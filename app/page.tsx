@@ -142,6 +142,79 @@ type ComplaintFollowUp = {
   urgentAnswer: string;
   options: string[];
 };
+type AdaptiveCasePrompt = {
+  durationQuestion: string;
+  symptomsQuestion: string;
+  durationOptions: string[];
+  symptomOptions: string[];
+  helper: string;
+};
+const adaptiveCasePrompt = (complaint: string): AdaptiveCasePrompt => {
+  const text = complaint.toLowerCase();
+  if (/chest pain|chest pressure|tightness in chest|pain in chest|seene mein dard|chest mein dard/.test(text)) return {
+    durationQuestion: "When did the chest discomfort begin, and was it sudden or gradual?",
+    symptomsQuestion: "What brings it on or eases it, and does it spread anywhere?",
+    durationOptions: ["Started today", "Started in the last few days", "Has been recurring for weeks", "I am not sure"],
+    symptomOptions: ["Worse with activity", "Worse with breathing or movement", "Spreads to arm, jaw, back, or shoulder", "No clear trigger"],
+    helper: "These questions help your clinician understand the pattern. They do not diagnose a heart condition.",
+  };
+  if (/shortness of breath|breathless|difficulty breathing|cannot breathe|wheez|saans|saans lene|cough|khansi/.test(text)) return {
+    durationQuestion: "When did the breathing or cough concern begin, and how has it changed?",
+    symptomsQuestion: "What is the breathing or cough pattern like for you?",
+    durationOptions: ["Started today", "Started in the last 3 days", "Started more than a week ago", "Comes and goes"],
+    symptomOptions: ["Mostly at rest", "Mostly with walking or activity", "With cough or phlegm", "With fever or body aches"],
+    helper: "Describe what you notice in your own words; you can also choose a quick starting point below.",
+  };
+  if (/headache|migraine|sir dard|dizzy|chakkar/.test(text)) return {
+    durationQuestion: "When did the headache or dizziness begin, and is this different from your usual pattern?",
+    symptomsQuestion: "Which details best describe this headache or dizziness?",
+    durationOptions: ["Started suddenly today", "Started gradually today", "Present for several days", "Similar episodes before"],
+    symptomOptions: ["One-sided or throbbing pain", "With light or sound sensitivity", "With nausea or vomiting", "With vision or balance changes"],
+    helper: "Add what feels different for you, including anything that makes it better or worse.",
+  };
+  if (/stomach|abdominal|belly|diarrh|loose motion|vomit|nausea|pet dard/.test(text)) return {
+    durationQuestion: "When did the stomach concern begin, and where do you feel it most?",
+    symptomsQuestion: "Which stomach-related details apply to your concern?",
+    durationOptions: ["Started today", "Started in the last 2–3 days", "Started more than a week ago", "Comes and goes after food"],
+    symptomOptions: ["Cramping or bloating", "Nausea or vomiting", "Loose stools or constipation", "Related to meals"],
+    helper: "Include food, fluids, and anything that changes the discomfort if you know it.",
+  };
+  if (/rash|itch|skin|hives|allerg|sujan/.test(text)) return {
+    durationQuestion: "When did the skin or allergy concern appear, and how has it spread or changed?",
+    symptomsQuestion: "What does the skin or allergy concern feel or look like?",
+    durationOptions: ["Appeared today", "Appeared in the last few days", "Present for more than a week", "Keeps returning"],
+    symptomOptions: ["Itchy", "Painful or burning", "Red or swollen", "After a new food, medicine, or product"],
+    helper: "You can describe the area, appearance, and anything new that happened before it started.",
+  };
+  if (/urine|urinary|burning urine|pee|frequent urination|peshab/.test(text)) return {
+    durationQuestion: "When did the urinary concern begin, and how often is it happening?",
+    symptomsQuestion: "Which urinary details best match what you are experiencing?",
+    durationOptions: ["Started today", "Started in the last few days", "Present for more than a week", "Has happened before"],
+    symptomOptions: ["Burning or pain", "Going more often", "Lower tummy discomfort", "Fever or back pain"],
+    helper: "Share only what you are comfortable sharing. Your clinician can ask more privately.",
+  };
+  if (/fever|bukhar|body ache|chills/.test(text)) return {
+    durationQuestion: "When did the fever or body-ache concern begin, and what is the highest temperature if known?",
+    symptomsQuestion: "What other changes have you noticed with the fever or body aches?",
+    durationOptions: ["Started today", "Started in the last 2–3 days", "Started more than a week ago", "Comes and goes"],
+    symptomOptions: ["Chills or sweating", "Cough, cold, or sore throat", "Stomach symptoms", "Rash or unusual tiredness"],
+    helper: "A measured temperature is useful if you have one, but it is okay not to know it.",
+  };
+  if (/injury|fall|sprain|swelling|joint|back pain|backache|hurt/.test(text)) return {
+    durationQuestion: "When did the injury or pain begin, and what happened just before it started?",
+    symptomsQuestion: "How is the injury or pain affecting movement and daily activity?",
+    durationOptions: ["Happened today", "Happened in the last few days", "Started gradually", "Keeps returning"],
+    symptomOptions: ["Pain with movement", "Swelling or bruising", "Difficulty using the area", "Pain at rest or at night"],
+    helper: "Describe the activity, location, and what you can or cannot do now.",
+  };
+  return {
+    durationQuestion: "When did this concern begin, and how has it changed since then?",
+    symptomsQuestion: "What details would help your clinician understand this concern better?",
+    durationOptions: ["Started today", "Started in the last few days", "Started more than a week ago", "Comes and goes"],
+    symptomOptions: ["Getting better", "About the same", "Getting worse", "Affects daily activities"],
+    helper: "Use your own words. The next questions will become more specific after you describe your concern.",
+  };
+};
 const seriousComplaintFollowUp = (complaint: string): ComplaintFollowUp | null => {
   const text = complaint.toLowerCase();
   if (/chest pain|chest pressure|tightness in chest|pain in chest|seene mein dard|chest mein dard/.test(text))
@@ -2058,6 +2131,15 @@ export default function CareSetu() {
     const previousCases = visits
       .filter((visit) => Boolean(visit.summary))
       .sort((a, b) => b.date.localeCompare(a.date));
+    const casePrompt = adaptiveCasePrompt(answers.complaint || "");
+    const currentQuestion =
+      step === 2
+        ? casePrompt.durationQuestion
+        : step === 3
+          ? casePrompt.symptomsQuestion
+          : questions[step];
+    const stepLabel = (index: number) =>
+      index === 2 ? "Case timeline" : index === 3 ? "Case details" : questions[index];
     return (
       <>
         <PageHeading
@@ -2075,7 +2157,7 @@ export default function CareSetu() {
                 <span>
                   {answers[intakeKeys[i]] ? <Check size={15} /> : i + 1}
                 </span>
-                {t(q)}
+                {t(stepLabel(i))}
               </button>
             ))}
             <button
@@ -2101,7 +2183,10 @@ export default function CareSetu() {
             <div className="question-icon">
               <Sparkles size={24} />
             </div>
-            <h2>{t(questions[step])}</h2>
+            <h2>{t(currentQuestion)}</h2>
+            {(step === 2 || step === 3) && (
+              <Badge tone="mint">Case-specific follow-up</Badge>
+            )}
             {step === 0 ? (
               <>
                 <p>
@@ -2189,24 +2274,25 @@ export default function CareSetu() {
             ) : (
               <>
                 <p>
-                  {step === 4
+                  {step === 2 || step === 3
+                    ? casePrompt.helper
+                    : step === 4
                     ? "Include names and doses only if known. Previous prescriptions do not confirm current use."
                     : step === 5
                       ? "Include any reaction, or say you do not know. Unknown does not mean no allergies."
                       : "Share what you know. You can correct your answer later."}
                 </p>
-                {step === 2 && (
-                  <div className="duration-options" aria-label="Choose when symptoms started">
-                    {["1–3 days", "3–7 days", "7–10 days", "More than 10 days"].map(
+                {(step === 2 || step === 3) && (
+                  <div className="duration-options" aria-label="Choose a quick answer or type your own response">
+                    {(step === 2 ? casePrompt.durationOptions : casePrompt.symptomOptions).map(
                       (option) => (
                         <button
                           key={option}
                           className={
-                            answers.duration === option ? "selected" : ""
+                            answers[intakeKeys[step]] === option ? "selected" : ""
                           }
                           onClick={() => {
                             setAnswer(option);
-                            moveStep(3);
                           }}
                         >
                           {option}
@@ -2216,12 +2302,12 @@ export default function CareSetu() {
                   </div>
                 )}
                 <label className="field">
-                  <span>{t("Your answer")}</span>
+                  <span>{step === 2 || step === 3 ? "Or type your own answer" : t("Your answer")}</span>
                   <textarea
                     rows={5}
                     value={answers[intakeKeys[step]] || ""}
                     onChange={(e) => setAnswer(e.target.value)}
-                    placeholder="Type here…"
+                    placeholder={step === 2 || step === 3 ? "Type the details that matter to you…" : "Type here…"}
                   />
                 </label>
                 {step === 1 && complaintFollowUp && (
@@ -2269,6 +2355,15 @@ export default function CareSetu() {
                         </button>
                       ))}
                     </div>
+                    <label className="field" style={{ textAlign: "left" }}>
+                      <span>Or type your own answer</span>
+                      <textarea
+                        rows={3}
+                        value={answers["safety follow-up"] || ""}
+                        onChange={(event) => setSafetyFollowUp(event.target.value)}
+                        placeholder="Describe what is happening now…"
+                      />
+                    </label>
                     {safetyFollowUpIsUrgent && (
                       <p className="fine">
                         Please use the urgent help options before continuing.
@@ -2292,7 +2387,7 @@ export default function CareSetu() {
                       if ("speechSynthesis" in window) {
                         speechSynthesis.cancel();
                         const speech = new SpeechSynthesisUtterance(
-                          t(questions[step]),
+                          t(currentQuestion),
                         );
                         speech.lang = lang === "en" ? "en-IN" : lang + "-IN";
                         speechSynthesis.speak(speech);
