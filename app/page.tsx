@@ -1823,15 +1823,24 @@ export default function CareSetu() {
               <div className="grow">
                 <div className="card-head">
                   <div>
-                    <span className="eyebrow">{t("ABHA HEALTH RECORD")}</span>
-                    <h2>{t("My Health Records")}</h2>
+                    <span className="eyebrow">
+                      {t("ABHA HEALTH RECORD")} · SIMULATED
+                    </span>
+                    <h2>{t("ABHA Health Account")}</h2>
                   </div>
                   <Badge tone="sand">{t("Simulated")}</Badge>
                 </div>
                 <p>
                   {t("Access your longitudinal health history in one place.")}
                 </p>
-                <strong>{t("10 years of health history")}</strong>
+                <strong>12-3456-7890-1234</strong>
+                <p className="fine">
+                  {t("Fictional ABHA ID")} · {t("Linked status: Simulated account")}
+                </p>
+                <p className="fine">
+                  This demo is not connected to ABDM or any government health
+                  record service. Your fictional records stay in this browser.
+                </p>
                 <div className="form-actions">
                   <Btn onClick={() => go("Health Records")}>
                     {t("View Records")}
