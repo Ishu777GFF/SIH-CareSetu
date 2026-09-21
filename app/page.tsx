@@ -1,5 +1,6 @@
 "use client";
 import React, { useEffect, useRef, useState } from "react";
+import QRCode from "qrcode";
 import {
   Activity,
   ArrowRight,
@@ -36,6 +37,10 @@ import {
   Download,
   AlertTriangle,
   CheckCircle2,
+  Copy,
+  QrCode,
+  RefreshCw,
+  Smartphone,
 } from "lucide-react";
 import {
   Area,
@@ -81,10 +86,20 @@ import {
   Visit,
 } from "@/lib/medi-data";
 import { languageNames, Lang, translate } from "@/lib/medi-i18n";
+import {
+  consumePhoneAccessToken,
+  createPhoneAccessToken,
+  formatPhoneAccessCountdown,
+  getPhoneAccessToken,
+  phoneAccessLink,
+  revokePhoneAccessToken,
+  type PhoneAccessToken,
+} from "@/lib/phone-access";
 import Landing from "./landing";
 import RegistrationScreen from "./registration";
 import HealthRecordsPage from "./health-records";
 import NotificationPanel from "./notification-panel";
+import "./phone-access.css";
 import {
   addNotification,
   invalidateNotificationEvents,
@@ -501,6 +516,11 @@ export default function CareSetu() {
   const [lang, setLang] = useState<Lang>("en");
   const [theme, setTheme] = useState("system");
   const [modal, setModal] = useState<Modal>(null);
+  const [phoneAccess, setPhoneAccess] = useState<PhoneAccessToken | null>(null);
+  const [phoneAccessQr, setPhoneAccessQr] = useState("");
+  const [phoneAccessNow, setPhoneAccessNow] = useState(Date.now());
+  const [mobileAccessTokenId, setMobileAccessTokenId] = useState<string | null>(null);
+  const [mobileAccessRoute, setMobileAccessRoute] = useState(false);
   const [toast, setToast] = useState("");
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All");
@@ -636,7 +656,14 @@ export default function CareSetu() {
     } catch {}
     const path = location.pathname;
     const route = path.replace(/^\/(patient|doctor)\/?/, "").replace(/\/$/, "");
-    if (path.startsWith("/auth/")) {
+    if (path === "/mobile-access") {
+      setLandingVisible(false);
+      setRegistrationMode(false);
+      setAuth(false);
+      setRole("patient");
+      setMobileAccessRoute(true);
+      setMobileAccessTokenId(new URLSearchParams(location.search).get("token"));
+    } else if (path.startsWith("/auth/")) {
       setAuth(true);
       setRole(path.endsWith("doctor") ? "doctor" : "patient");
     } else if (path.startsWith("/doctor")) {
@@ -761,7 +788,62 @@ export default function CareSetu() {
       return () => clearTimeout(timer);
     }
   }, [toast]);
+  useEffect(() => {
+    if (!phoneAccess) return;
+    const refresh = () => {
+      setPhoneAccess(getPhoneAccessToken(phoneAccess.tokenId) || null);
+      setPhoneAccessNow(Date.now());
+    };
+    const timer = window.setInterval(refresh, 1000);
+    window.addEventListener("storage", refresh);
+    window.addEventListener("caresetu-phone-access", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("storage", refresh);
+      window.removeEventListener("caresetu-phone-access", refresh);
+    };
+  }, [phoneAccess?.tokenId]);
+  useEffect(() => {
+    if (!phoneAccess || phoneAccess.status !== "ACTIVE") {
+      setPhoneAccessQr("");
+      return;
+    }
+    QRCode.toDataURL(phoneAccessLink(phoneAccess.tokenId), {
+      width: 260,
+      margin: 1,
+      errorCorrectionLevel: "M",
+      color: { dark: "#10231b", light: "#ffffff" },
+    }).then(setPhoneAccessQr).catch(() => setPhoneAccessQr(""));
+  }, [phoneAccess?.tokenId, phoneAccess?.status]);
   const notify = (message: string) => setToast(t(message));
+  const generatePhoneAccess = () => {
+    if (phoneAccess?.status === "ACTIVE") revokePhoneAccessToken(phoneAccess.tokenId);
+    const token = createPhoneAccessToken(patient.id);
+    setPhoneAccess(token);
+    setPhoneAccessNow(Date.now());
+    open("phone-access");
+  };
+  const copyPhoneAccessLink = async () => {
+    if (!phoneAccess) return;
+    try {
+      await navigator.clipboard.writeText(phoneAccessLink(phoneAccess.tokenId));
+      notify("Link copied");
+    } catch {
+      notify("Could not copy the link. Select the link and copy it manually.");
+    }
+  };
+  const continueMobileAccess = () => {
+    if (!mobileAccessTokenId) return;
+    const token = consumePhoneAccessToken(mobileAccessTokenId);
+    if (!token) return;
+    setS((previous) => ({ ...previous, selectedPatient: token.patientId }));
+    sessionStorage.setItem("medi-role", "patient");
+    sessionStorage.setItem("caresetu-demo-mobile-session", token.tokenId);
+    setPage("Overview");
+    setMobileAccessRoute(false);
+    setMobileAccessTokenId(null);
+    history.replaceState({}, "", "/patient/overview");
+  };
   const go = (name: string) => {
     setPage(name);
     setQuery("");
@@ -1140,16 +1222,19 @@ export default function CareSetu() {
     onClick,
     secondary = false,
     disabled = false,
+    ariaLabel,
   }: {
     children: React.ReactNode;
     onClick?: () => void;
     secondary?: boolean;
     disabled?: boolean;
+    ariaLabel?: string;
   }) => (
     <button
       disabled={disabled}
       className={secondary ? "button secondary" : "button"}
       onClick={onClick}
+      aria-label={ariaLabel}
     >
       {children}
     </button>
@@ -1667,10 +1752,16 @@ export default function CareSetu() {
             </h1>
             <p>{t("Your health, a little more connected.")}</p>
           </div>
-          <Btn secondary onClick={() => open("book")}>
-            <Plus size={17} />
-            {t("Book appointment")}
-          </Btn>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <Btn secondary onClick={generatePhoneAccess} ariaLabel={t("Open on Phone")}>
+              <QrCode size={17} />
+              {t("Open on Phone")}
+            </Btn>
+            <Btn secondary onClick={() => open("book")}>
+              <Plus size={17} />
+              {t("Book appointment")}
+            </Btn>
+          </div>
         </div>
         <div className="dashboard-grid">
           <div className="main-column">
@@ -2530,10 +2621,16 @@ export default function CareSetu() {
           <p>{subtitle}</p>
         </div>
         {!isDoctor && (
-          <Btn secondary onClick={() => open("book")}>
-            <Plus size={16} />
-            {t("Book appointment")}
-          </Btn>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <Btn secondary onClick={generatePhoneAccess} ariaLabel={t("Open on Phone")}>
+              <QrCode size={16} />
+              {t("Open on Phone")}
+            </Btn>
+            <Btn secondary onClick={() => open("book")}>
+              <Plus size={16} />
+              {t("Book appointment")}
+            </Btn>
+          </div>
         )}
       </div>
     );
@@ -3211,6 +3308,50 @@ export default function CareSetu() {
     if (!modal) return null;
     const v = s.visits.find((x) => x.id === modal.id);
     const d = doctorFor(bookDoctor);
+    if (modal.type === "phone-access") {
+      const active = phoneAccess?.status === "ACTIVE";
+      const expired = phoneAccess?.status === "EXPIRED";
+      const link = phoneAccess ? phoneAccessLink(phoneAccess.tokenId) : "";
+      const countdown = phoneAccess ? formatPhoneAccessCountdown(phoneAccess.expiresAt, phoneAccessNow) : "00:00";
+      const shareText = `Open your CareSetu session securely using this link:\n\n${link}\n\nThis link expires shortly.`;
+      return (
+        <section className="phone-access-modal">
+          <Badge tone="sand">{t("Demo Mode")}</Badge>
+          {active ? (
+            <>
+              <p className="phone-access-copy">{t("Scan this QR code to securely open CareSetu on your phone.")}</p>
+              {phoneAccessQr ? (
+                <img className="phone-access-qr" src={phoneAccessQr} alt="QR code for a temporary CareSetu access link" />
+              ) : <div className="phone-access-qr" aria-label="Generating QR code" />}
+              <p className="fine">{t("Scan with your phone camera")}</p>
+              <div className="phone-access-status" aria-live="polite">
+                <Smartphone size={18} />
+                <span>{t("Phone access")}: <strong>Demo QR generated</strong></span>
+                <span aria-hidden="true">•</span>
+                <span>{t("Link expires in")} <strong>{countdown}</strong></span>
+              </div>
+              <div className="phone-access-actions">
+                <Btn onClick={() => window.open(`https://wa.me/?text=${encodeURIComponent(shareText)}`, "_blank", "noopener,noreferrer")}>
+                  <MessageCircle size={17} /> {t("Send Link via WhatsApp")}
+                </Btn>
+                <Btn secondary onClick={copyPhoneAccessLink}><Copy size={17} /> {t("Copy Secure Link")}</Btn>
+                <Btn secondary onClick={() => { const revoked = revokePhoneAccessToken(phoneAccess!.tokenId); setPhoneAccess(revoked || null); }}>
+                  {t("Revoke Phone Access")}
+                </Btn>
+              </div>
+              <p className="phone-access-note"><ShieldCheck size={18} /> QR codes contain a temporary access link, not your medical records.</p>
+              <p className="fine">Demo validation is browser-local. A real phone handoff and real-time connection status require a server-side token service.</p>
+            </>
+          ) : (
+            <>
+              <p className="phone-access-copy">{t(expired ? "QR code expired" : "This mobile access link is no longer valid.")}</p>
+              <p className="fine">The old temporary link is no longer accepted.</p>
+              <Btn onClick={generatePhoneAccess}><RefreshCw size={17} /> {t("Generate New QR")}</Btn>
+            </>
+          )}
+        </section>
+      );
+    }
     if (modal.type === "emergency") return <EmergencyLocationPanel />;
     if (modal.type === "chat") {
       const chatDoctorId = isDoctor
@@ -4486,6 +4627,7 @@ export default function CareSetu() {
     finalize: "Confirm clinical review",
     cancel: "Cancel appointment",
     reset: "Reset records",
+    "phone-access": "Continue on your phone",
   };
   if (!ready)
     return (
@@ -4514,6 +4656,35 @@ export default function CareSetu() {
         onComplete={finishRegister}
       />
     );
+  if (ready && mobileAccessRoute) {
+    const accessToken = getPhoneAccessToken(mobileAccessTokenId);
+    const valid = accessToken?.status === "ACTIVE";
+    return (
+      <main className="phone-access-landing">
+        <section className="card">
+          <div className="phone-access-brand"><HeartPulse size={25} /><strong>CareSetu</strong></div>
+          <Badge tone="sand">{t("Demo Mode")}</Badge>
+          {valid ? (
+            <>
+              <h1>{t("Continue securely on this device")}</h1>
+              <p>This temporary CareSetu link has been validated in this demo browser session.</p>
+              <Btn onClick={continueMobileAccess}>{t("Continue")}</Btn>
+              <p className="fine">Demo mobile session · No medical information is included in this link.</p>
+            </>
+          ) : (
+            <>
+              <h1>{t("Invalid or expired link")}</h1>
+              <p>This link is invalid, expired, revoked, or unavailable in this browser’s demo storage.</p>
+              <Btn secondary onClick={() => { setMobileAccessRoute(false); history.replaceState({}, "", "/"); setLandingVisible(true); }}>
+                {t("Return to CareSetu")}
+              </Btn>
+              <p className="fine">Demo validation is local only. Production validation must happen on the CareSetu server.</p>
+            </>
+          )}
+        </section>
+      </main>
+    );
+  }
   return (
     <>
       <a className="skip-link" href="#main">
