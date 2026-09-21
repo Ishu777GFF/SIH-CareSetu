@@ -635,6 +635,8 @@ export default function CareSetu() {
   const [visitTab, setVisitTab] = useState("Overview");
   const [note, setNote] = useState("");
   const [followup, setFollowup] = useState("");
+  const [reminderDate, setReminderDate] = useState(day(7));
+  const [reminderType, setReminderType] = useState("Next visit reminder");
   const [priority, setPriority] = useState("Unassessed");
   const [priorityReason, setPriorityReason] = useState("");
   const [online, setOnline] = useState(true);
@@ -881,6 +883,10 @@ export default function CareSetu() {
       return () => clearTimeout(timer);
     }
   }, [toast]);
+  useEffect(() => {
+    if (!ready) return;
+    try { localStorage.setItem(`caresetu-chat-draft-${role}-${patient.id}`, chatDraft); } catch {}
+  }, [chatDraft, ready, role, patient.id]);
   useEffect(() => {
     if (!phoneAccess) return;
     const refresh = () => {
@@ -1198,6 +1204,7 @@ export default function CareSetu() {
         ...prev.answers[patient.id],
         [intakeKeys[step]]: value,
       };
+      if (patientAnswers["helper consent"] === "confirmed") patientAnswers[`${intakeKeys[step]} source`] = "Entered with helper assistance";
       if (intakeKeys[step] === "complaint")
         delete patientAnswers["safety follow-up"];
       return {
@@ -2238,6 +2245,16 @@ export default function CareSetu() {
               <Sparkles size={24} />
             </div>
             <h2>{t(currentQuestion)}</h2>
+            {step > 0 && (
+              <details className="clinical-alert">
+                <summary>I am helping this patient</summary>
+                <p className="fine">Use this only with the patient’s permission. The clinician will see which answers were assisted.</p>
+                <label className="field"><span>Helper name</span><input value={answers["helper name"] || ""} onChange={(event) => setS(prev => ({ ...prev, answers: { ...prev.answers, [patient.id]: { ...prev.answers[patient.id], "helper name": event.target.value } } }))} /></label>
+                <label className="field"><span>Relationship / role</span><input value={answers["helper relationship"] || ""} onChange={(event) => setS(prev => ({ ...prev, answers: { ...prev.answers, [patient.id]: { ...prev.answers[patient.id], "helper relationship": event.target.value } } }))} placeholder="Family member, caregiver, ASHA worker…" /></label>
+                <label className="consent-option"><input type="checkbox" checked={answers["helper consent"] === "confirmed"} onChange={(event) => setS(prev => ({ ...prev, answers: { ...prev.answers, [patient.id]: { ...prev.answers[patient.id], "helper consent": event.target.checked ? "confirmed" : "" } } }))} /><span>The patient has agreed to this assistance.</span></label>
+                {answers["helper consent"] === "confirmed" && <p className="fine">Answers entered while this is enabled are recorded as helper-assisted.</p>}
+              </details>
+            )}
             {(step === 2 || step === 3) && (
               <Badge tone="mint">Case-specific follow-up</Badge>
             )}
@@ -3115,6 +3132,14 @@ export default function CareSetu() {
               ))}
             </select>
           </div>
+          <details className="clinical-alert">
+            <summary>Queue fairness view</summary>
+            <p>Suggested order is transparent and never applied automatically. The clinician remains in control.</p>
+            <ol className="timeline">
+              {[...shown].sort((a, b) => Number(b.provisional === "Urgent concern") - Number(a.provisional === "Urgent concern") || a.time.localeCompare(b.time) || String(a.token || "ZZZ").localeCompare(String(b.token || "ZZZ"))).map((visit, index) => <li key={visit.id}><strong>{index + 1}. {getPatient(visit.patientId).name}</strong> · {visit.provisional === "Urgent concern" ? "urgent safety review" : visit.time ? `appointment ${visit.time}` : "awaiting appointment time"}{visit.token ? ` · token ${visit.token}` : ""}{getPatient(visit.patientId).age >= 65 ? " · older patient" : ""}</li>)}
+            </ol>
+            <p className="fine">Use Review to override the suggested ordering or change a doctor-confirmed priority.</p>
+          </details>
           <div className="table-wrap">
             <table className="queue-table">
               <thead>
@@ -4492,19 +4517,21 @@ export default function CareSetu() {
             Fictional authorized care scope: General Medicine · Room{" "}
             {room(v.doctorId)}
           </p>
+          <details className="clinical-alert">
+            <summary>Why this priority?</summary>
+            <p><strong>AI safety priority:</strong> {v.provisional} · requires clinical review.</p>
+            <ul>
+              {v.summary?.toLowerCase().includes("severe") && <li>Patient-reported severe symptom wording</li>}
+              {v.summary?.toLowerCase().includes("duration") && <li>Symptom duration was recorded</li>}
+              {v.safetyAlert && <li>Red-flag response was recorded</li>}
+              {s.reports.filter(r => r.visitId === v.id && !r.verified).length > 0 && <li>Uploaded report item needs clinician verification</li>}
+              {s.observations.some(o => o.patientId === v.patientId && (o.oxygen || 100) < 94) && <li>Low patient-recorded oxygen value needs review</li>}
+              {!v.summary && <li>Incomplete information requires clinical review</li>}
+            </ul>
+            <p><strong>Doctor-confirmed priority:</strong> {v.priority}. Only the clinician may set or change this.</p>
+          </details>
           {v.provisional === "Urgent concern" && (
-            <Btn
-              secondary
-              onClick={() =>
-                changeVisit(
-                  v.id,
-                  { provisional: "Acknowledged — awaiting assessment" },
-                  "Dr. Meera Sharma acknowledged the urgent concern",
-                )
-              }
-            >
-              Acknowledge urgent concern
-            </Btn>
+            <><section className="clinical-alert"><h3>Emergency handover acknowledgement</h3><ol className="timeline"><li>Safety alert created</li><li>Patient shown emergency instructions</li><li>{v.provisional.includes("Acknowledged") ? "Clinician/staff acknowledged alert" : "Awaiting clinician/staff acknowledgement"}</li><li>Patient guidance recorded in the case activity</li></ol><p className="fine">This records a local prototype workflow. It does not confirm ambulance dispatch or hospital receipt.</p></section><Btn secondary onClick={() => changeVisit(v.id, { provisional: "Acknowledged — awaiting assessment" }, "Clinician/staff acknowledged urgent concern; patient guidance recorded")}>Acknowledge urgent concern</Btn></>
           )}
           <div className="clinical-alert">
             Allergies: {s.answers[p.id]?.allergies || "Not known"} · Source:
@@ -4535,6 +4562,7 @@ export default function CareSetu() {
               onChange={(e) => setFollowup(e.target.value)}
             />
           </label>
+          <section className="clinical-alert"><h3>Smart follow-up planner</h3><p>Creates a patient-specific reminder. It does not generate treatment advice.</p><div className="form-grid"><label className="field"><span>Reminder type</span><select value={reminderType} onChange={event => setReminderType(event.target.value)}>{["Next visit reminder", "Upload report reminder", "Medicine list update reminder", "Health tracker reminder"].map(item => <option key={item}>{item}</option>)}</select></label><label className="field"><span>Date</span><input type="date" value={reminderDate} onChange={event => setReminderDate(event.target.value)} /></label></div><Btn secondary onClick={() => { emitNotification("patient", p.id, { type: "follow-up", title: reminderType, message: `Reminder set for ${date(reminderDate)} by ${doctorFor(v.doctorId).name}.`, entityType: "visit", entityId: v.id, eventKey: `follow-up-${v.id}-${reminderType}-${reminderDate}` }); changeVisit(v.id, {}, `${reminderType} recorded for ${reminderDate}`); notify("Patient reminder recorded"); }}>Add patient reminder</Btn></section>
           <Btn secondary onClick={() => open("refer", v.id)}>
             Refer to another doctor
           </Btn>
@@ -5168,8 +5196,7 @@ export default function CareSetu() {
             </header>
             {!online && (
               <div className="offline-banner">
-                Offline · fictional changes stay on this device. No staff
-                notifications are sent.
+                Offline / low-network mode · answers, draft chat text, and report-upload metadata are saved on this device and will be available when you return online. No staff notifications are sent.
               </div>
             )}
             <main id="main" className="content">
